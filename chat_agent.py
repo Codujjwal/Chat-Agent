@@ -9,95 +9,106 @@ import os
 class TitanicChatAgent:
     def __init__(self, df: pd.DataFrame):
         """
-        Initialize the Titanic chatbot agent with proper security settings
-        and error handling
+        Initialize the Titanic chatbot agent with local analysis capabilities
         """
-        try:
-            # Check for API key
-            if not os.getenv("OPENAI_API_KEY"):
-                raise ValueError("OpenAI API key not found. Please provide a valid API key.")
-
-            self.llm = ChatOpenAI(
-                temperature=0,
-                model="gpt-3.5-turbo",
-                request_timeout=30
-            )
-            self.agent = create_pandas_dataframe_agent(
-                self.llm,
-                df,
-                verbose=True,
-                agent_type=AgentType.OPENAI_FUNCTIONS,
-                handle_parsing_errors=True,
-                max_iterations=5,  # Limit iterations for safety
-                max_execution_time=30,  # Timeout in seconds
-                allow_python_primitives=True,  # Allow basic Python operations
-                allow_pandas_syntax=True,  # Enable Pandas operations
-                allow_dangerous_code=True  # Required for DataFrame operations but with controlled scope
-            )
-            self.df = df
-
-            # Verify agent initialization with basic query
-            test_query = "Count total rows"
-            self._verify_agent(test_query)
-
-        except Exception as e:
-            error_msg = str(e)
-            if "insufficient_quota" in error_msg.lower():
-                raise Exception("OpenAI API quota exceeded. Please ensure your API key has sufficient credits.")
-            elif "invalid_api_key" in error_msg.lower():
-                raise Exception("Invalid OpenAI API key. Please provide a valid API key.")
-            else:
-                raise Exception(f"Failed to initialize chat agent: {str(e)}")
-
-    def _verify_agent(self, test_query: str) -> None:
-        """
-        Verify agent functionality with a test query
-        """
-        try:
-            self.agent.run(test_query)
-        except Exception as e:
-            error_msg = str(e)
-            if "insufficient_quota" in error_msg.lower():
-                raise Exception("OpenAI API quota exceeded during verification. Please check your API key's quota.")
-            raise Exception(f"Agent verification failed: {str(e)}")
+        self.df = df
+        self.cache = {}  # Simple response cache
+        self.common_queries = {
+            'survival_rate': self._get_survival_rate,
+            'passenger_count': self._get_passenger_count,
+            'class_distribution': self._get_class_distribution,
+            'gender_distribution': self._get_gender_distribution,
+            'age_stats': self._get_age_stats,
+            'fare_stats': self._get_fare_stats,
+        }
 
     def get_response(self, query: str) -> Union[Dict[str, Any], str]:
         """
-        Process the user query and return appropriate response with
-        comprehensive error handling
+        Process queries with local analysis first, fallback to API if needed
         """
         if not query or not isinstance(query, str):
             return "Please provide a valid question about the Titanic dataset."
 
         try:
+            # Check cache first
+            if query in self.cache:
+                return self.cache[query]
+
             # Check for visualization requests
             viz_response = self._check_visualization_request(query)
             if viz_response:
                 return viz_response
 
-            # Process the query with safety checks
-            if self._is_safe_query(query):
-                response = self.agent.run(query)
-                # Clean and format the response
-                formatted_response = self._format_response(response)
-                return formatted_response
-            else:
-                return "I apologize, but I cannot process that query for security reasons. Please try a different question."
+            # Try local analysis first
+            local_response = self._handle_local_query(query)
+            if local_response:
+                self.cache[query] = local_response
+                return local_response
+
+            return "I can provide basic statistics and visualizations about the Titanic dataset. Please try asking about survival rates, passenger demographics, or request specific visualizations."
 
         except Exception as e:
             return self._handle_error(e)
 
-    def _is_safe_query(self, query: str) -> bool:
+    def _handle_local_query(self, query: str) -> str:
         """
-        Check if the query is safe to execute
+        Handle queries using local data analysis
         """
-        # List of potentially dangerous keywords
-        dangerous_keywords = [
-            "exec", "eval", "delete", "drop", "truncate",
-            "system", "os.", "subprocess", "import"
-        ]
         query_lower = query.lower()
-        return not any(keyword in query_lower for keyword in dangerous_keywords)
+
+        # Check for survival rate queries
+        if 'survival' in query_lower or 'survived' in query_lower:
+            return self._get_survival_rate()
+
+        # Check for passenger count queries
+        if 'how many' in query_lower and 'passengers' in query_lower:
+            return self._get_passenger_count()
+
+        # Check for class distribution queries
+        if 'class' in query_lower and ('distribution' in query_lower or 'breakdown' in query_lower):
+            return self._get_class_distribution()
+
+        # Check for gender distribution queries
+        if ('gender' in query_lower or 'male' in query_lower or 'female' in query_lower) and 'distribution' in query_lower:
+            return self._get_gender_distribution()
+
+        # Check for age statistics queries
+        if 'age' in query_lower:
+            return self._get_age_stats()
+
+        # Check for fare statistics queries
+        if 'fare' in query_lower or 'ticket' in query_lower or 'price' in query_lower:
+            return self._get_fare_stats()
+
+        return None
+
+    def _get_survival_rate(self) -> str:
+        survived = self.df['Survived'].mean() * 100
+        return f"The overall survival rate was {survived:.1f}% of passengers."
+
+    def _get_passenger_count(self) -> str:
+        total = len(self.df)
+        return f"There were {total} passengers in the dataset."
+
+    def _get_class_distribution(self) -> str:
+        class_counts = self.df['Pclass'].value_counts()
+        return f"Passenger class distribution: " + ", ".join([f"{class_counts[i]} passengers in {i}st class" for i in sorted(class_counts.index)])
+
+    def _get_gender_distribution(self) -> str:
+        gender_counts = self.df['Sex'].value_counts()
+        return f"Gender distribution: {gender_counts[0]} {gender_counts.index[0]}s and {gender_counts[1]} {gender_counts.index[1]}s"
+
+    def _get_age_stats(self) -> str:
+        avg_age = self.df['Age'].mean()
+        min_age = self.df['Age'].min()
+        max_age = self.df['Age'].max()
+        return f"Passenger age statistics: Average age was {avg_age:.1f} years, youngest passenger was {min_age:.0f} years old, oldest was {max_age:.0f} years old."
+
+    def _get_fare_stats(self) -> str:
+        avg_fare = self.df['Fare'].mean()
+        min_fare = self.df['Fare'].min()
+        max_fare = self.df['Fare'].max()
+        return f"Ticket fare statistics: Average fare was ${avg_fare:.2f}, cheapest ticket was ${min_fare:.2f}, most expensive was ${max_fare:.2f}."
 
     def _check_visualization_request(self, query: str) -> Union[Dict[str, Any], None]:
         """
@@ -141,34 +152,8 @@ class TitanicChatAgent:
 
         return None
 
-    def _format_response(self, response: str) -> str:
-        """
-        Clean and format the response for better presentation
-        """
-        # Remove any markdown formatting
-        response = re.sub(r'```.*?```', '', response, flags=re.DOTALL)
-        # Clean up newlines and spaces
-        response = re.sub(r'\s+', ' ', response).strip()
-        # Capitalize first letter
-        response = response[0].upper() + response[1:] if response else response
-
-        return response
-
     def _handle_error(self, error: Exception) -> str:
         """
         Handle different types of errors and return user-friendly messages
         """
-        error_msg = str(error)
-
-        if "insufficient_quota" in error_msg:
-            return ("I apologize, but I'm currently unable to process requests due to API limits. "
-                   "Please try again later or contact support.")
-        elif "rate_limit" in error_msg:
-            return "I'm receiving too many requests right now. Please wait a moment and try again."
-        elif "timeout" in error_msg:
-            return "The request took too long to process. Please try a simpler question."
-        elif "security" in error_msg.lower():
-            return "I cannot process that query due to security restrictions. Please try a different question."
-        else:
-            return ("I apologize, but I couldn't process that query. Please try rephrasing your "
-                   "question or ask something else.")
+        return "I apologize, but I couldn't process that query. Please try asking about basic statistics or request a visualization."

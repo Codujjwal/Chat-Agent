@@ -29,14 +29,9 @@ def initialize_data():
             chat_agent = TitanicChatAgent(df)
             summary = get_data_summary(df)
             st.session_state.data_loaded = True
-            st.session_state.error_count = 0  # Reset error count on successful initialization
             return df, chat_agent, summary
     except Exception as e:
-        error_msg = str(e)
-        if "openai" in error_msg.lower():
-            st.error("⚠️ OpenAI API Error: Please ensure your API key is valid and has sufficient credits.")
-        else:
-            st.error(f"Failed to load data: {str(e)}")
+        st.error(f"Failed to load data: {str(e)}")
         return None, None, None
 
 def handle_user_query(agent, query):
@@ -61,8 +56,11 @@ def main():
     # Header
     st.title("🚢 Titanic Dataset Analysis Chatbot")
     st.markdown("""
-    Ask questions about the Titanic dataset and get insights through natural conversation.
-    You can ask about statistics, create visualizations, or explore passenger information.
+    Explore the Titanic dataset through natural conversation! Ask questions about:
+    - Passenger statistics (survival rates, counts)
+    - Demographics (age, gender, class)
+    - Ticket information (fares, classes)
+    - Visualizations (distributions, comparisons)
     """)
 
     try:
@@ -87,19 +85,20 @@ def main():
         """)
 
         # Example questions
-        st.sidebar.title("Example Questions")
+        st.sidebar.title("Try These Questions")
         example_questions = [
-            "What percentage of passengers survived?",
+            "What was the overall survival rate?",
             "Show me a histogram of passenger ages",
             "What was the average ticket fare?",
             "Show me a pie chart of passenger classes",
-            "How many passengers embarked from each port?"
+            "What was the gender distribution?",
+            "How many passengers were there in total?"
         ]
 
         for question in example_questions:
             if st.sidebar.button(question):
                 # Process the example question
-                response = handle_user_query(st.session_state.chat_agent, question)
+                response = st.session_state.chat_agent.get_response(question)
                 st.session_state.chat_history.append({"role": "user", "content": question})
                 st.session_state.chat_history.append({"role": "assistant", "content": response})
 
