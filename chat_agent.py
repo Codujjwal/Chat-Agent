@@ -1,5 +1,5 @@
 from langchain_experimental.agents import create_pandas_dataframe_agent
-from langchain.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langchain.agents.agent_types import AgentType
 import os
 import re
@@ -9,15 +9,23 @@ class TitanicChatAgent:
         """
         Initialize the Titanic chatbot agent with proper security settings
         """
-        # the newest OpenAI model is "gpt-4o" which was released May 13, 2024
-        self.agent = create_pandas_dataframe_agent(
-            ChatOpenAI(temperature=0, model="gpt-4o"),
-            df,
-            verbose=True,
-            agent_type=AgentType.OPENAI_FUNCTIONS,
-            allow_dangerous_code=True,  # Required for DataFrame operations
-        )
-        self.df = df
+        try:
+            # the newest OpenAI model is "gpt-4o" which was released May 13, 2024
+            self.agent = create_pandas_dataframe_agent(
+                ChatOpenAI(
+                    temperature=0, 
+                    model="gpt-3.5-turbo",  # Using a more cost-effective model
+                    request_timeout=30
+                ),
+                df,
+                verbose=True,
+                agent_type=AgentType.OPENAI_FUNCTIONS,
+                allow_dangerous_code=True,  # Required for DataFrame operations
+            )
+            self.df = df
+        except Exception as e:
+            print(f"Error initializing agent: {str(e)}")
+            raise
 
     def get_response(self, query):
         """
@@ -25,7 +33,7 @@ class TitanicChatAgent:
         """
         # Input validation
         if not query or not isinstance(query, str):
-            return {"type": "text", "content": "Please provide a valid question about the Titanic dataset."}
+            return "Please provide a valid question about the Titanic dataset."
 
         # Check for visualization requests
         viz_patterns = {
@@ -38,14 +46,21 @@ class TitanicChatAgent:
             # Check for visualization patterns
             for viz_type, pattern in viz_patterns.items():
                 if re.search(pattern, query.lower()):
-                    return self._handle_visualization_query(query, viz_type)
+                    viz_response = self._handle_visualization_query(query, viz_type)
+                    if viz_response:
+                        return viz_response
 
             # Handle regular queries with error handling
             response = self.agent.run(query)
-            return {"type": "text", "content": response}
+            return response
         except Exception as e:
-            error_msg = f"I apologize, but I couldn't process that query. Error: {str(e)}"
-            return {"type": "text", "content": error_msg}
+            error_msg = str(e)
+            if "insufficient_quota" in error_msg:
+                return "I apologize, but I'm currently unable to process requests due to API limits. Please try again later or contact support to ensure your API key has sufficient credits."
+            elif "rate_limit" in error_msg:
+                return "I'm receiving too many requests right now. Please wait a moment and try again."
+            else:
+                return f"I apologize, but I couldn't process that query. Please try rephrasing your question or ask something else."
 
     def _handle_visualization_query(self, query, viz_type):
         """
@@ -100,8 +115,6 @@ class TitanicChatAgent:
                         }
                     }
 
-            # If no specific visualization is matched, try to get a text response
-            response = self.agent.run(query)
-            return {"type": "text", "content": response}
+            return None
         except Exception as e:
-            return {"type": "text", "content": f"Error creating visualization: {str(e)}"}
+            return f"Error creating visualization: {str(e)}"
