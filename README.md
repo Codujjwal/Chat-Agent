@@ -22,13 +22,13 @@ An interactive Streamlit application that allows users to explore and analyze th
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/[your-username]/titanic-analysis-chatbot.git
-cd titanic-analysis-chatbot
+git clone https://github.com/Codujjwal/Chat-Agent.git
+cd Chat-Agent
 ```
 
 2. Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip install streamlit pandas plotly
 ```
 
 3. Run the application:
