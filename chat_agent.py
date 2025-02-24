@@ -1,120 +1,174 @@
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain_community.chat_models import ChatOpenAI
 from langchain.agents.agent_types import AgentType
-import os
+from typing import Dict, Any, Union
+import pandas as pd
 import re
+import os
 
 class TitanicChatAgent:
-    def __init__(self, df):
+    def __init__(self, df: pd.DataFrame):
         """
         Initialize the Titanic chatbot agent with proper security settings
+        and error handling
         """
         try:
-            # the newest OpenAI model is "gpt-4o" which was released May 13, 2024
+            # Check for API key
+            if not os.getenv("OPENAI_API_KEY"):
+                raise ValueError("OpenAI API key not found. Please provide a valid API key.")
+
+            self.llm = ChatOpenAI(
+                temperature=0,
+                model="gpt-3.5-turbo",
+                request_timeout=30
+            )
             self.agent = create_pandas_dataframe_agent(
-                ChatOpenAI(
-                    temperature=0, 
-                    model="gpt-3.5-turbo",  # Using a more cost-effective model
-                    request_timeout=30
-                ),
+                self.llm,
                 df,
                 verbose=True,
                 agent_type=AgentType.OPENAI_FUNCTIONS,
-                allow_dangerous_code=True,  # Required for DataFrame operations
+                handle_parsing_errors=True,
+                max_iterations=5,  # Limit iterations for safety
+                max_execution_time=30,  # Timeout in seconds
+                allow_python_primitives=True,  # Allow basic Python operations
+                allow_pandas_syntax=True,  # Enable Pandas operations
+                allow_dangerous_code=True  # Required for DataFrame operations but with controlled scope
             )
             self.df = df
-        except Exception as e:
-            print(f"Error initializing agent: {str(e)}")
-            raise
 
-    def get_response(self, query):
+            # Verify agent initialization with basic query
+            test_query = "Count total rows"
+            self._verify_agent(test_query)
+
+        except Exception as e:
+            error_msg = str(e)
+            if "insufficient_quota" in error_msg.lower():
+                raise Exception("OpenAI API quota exceeded. Please ensure your API key has sufficient credits.")
+            elif "invalid_api_key" in error_msg.lower():
+                raise Exception("Invalid OpenAI API key. Please provide a valid API key.")
+            else:
+                raise Exception(f"Failed to initialize chat agent: {str(e)}")
+
+    def _verify_agent(self, test_query: str) -> None:
         """
-        Process the user query and return appropriate response
+        Verify agent functionality with a test query
         """
-        # Input validation
+        try:
+            self.agent.run(test_query)
+        except Exception as e:
+            error_msg = str(e)
+            if "insufficient_quota" in error_msg.lower():
+                raise Exception("OpenAI API quota exceeded during verification. Please check your API key's quota.")
+            raise Exception(f"Agent verification failed: {str(e)}")
+
+    def get_response(self, query: str) -> Union[Dict[str, Any], str]:
+        """
+        Process the user query and return appropriate response with
+        comprehensive error handling
+        """
         if not query or not isinstance(query, str):
             return "Please provide a valid question about the Titanic dataset."
 
-        # Check for visualization requests
+        try:
+            # Check for visualization requests
+            viz_response = self._check_visualization_request(query)
+            if viz_response:
+                return viz_response
+
+            # Process the query with safety checks
+            if self._is_safe_query(query):
+                response = self.agent.run(query)
+                # Clean and format the response
+                formatted_response = self._format_response(response)
+                return formatted_response
+            else:
+                return "I apologize, but I cannot process that query for security reasons. Please try a different question."
+
+        except Exception as e:
+            return self._handle_error(e)
+
+    def _is_safe_query(self, query: str) -> bool:
+        """
+        Check if the query is safe to execute
+        """
+        # List of potentially dangerous keywords
+        dangerous_keywords = [
+            "exec", "eval", "delete", "drop", "truncate",
+            "system", "os.", "subprocess", "import"
+        ]
+        query_lower = query.lower()
+        return not any(keyword in query_lower for keyword in dangerous_keywords)
+
+    def _check_visualization_request(self, query: str) -> Union[Dict[str, Any], None]:
+        """
+        Check if the query requires a visualization and handle accordingly
+        """
         viz_patterns = {
-            'histogram': r'histogram|distribution of|show .+ distribution',
-            'bar': r'bar chart|compare .+ across|show .+ by',
-            'pie': r'pie chart|percentage|proportion of'
+            'histogram': {
+                'pattern': r'histogram|distribution of|show .+ distribution',
+                'matches': {
+                    'age': {'column': 'Age', 'title': 'Distribution of Passenger Ages'},
+                    'fare': {'column': 'Fare', 'title': 'Distribution of Ticket Fares'}
+                }
+            },
+            'bar': {
+                'pattern': r'bar chart|compare .+ across|show .+ by',
+                'matches': {
+                    'embarked': {'column': 'Embarked', 'title': 'Passengers by Embarkation Port'},
+                    'class': {'column': 'Pclass', 'title': 'Passengers by Class'}
+                }
+            },
+            'pie': {
+                'pattern': r'pie chart|percentage|proportion of',
+                'matches': {
+                    'class': {'column': 'Pclass', 'title': 'Distribution of Passenger Classes'},
+                    'gender': {'column': 'Sex', 'title': 'Gender Distribution'},
+                    'survived': {'column': 'Survived', 'title': 'Survival Distribution'}
+                }
+            }
         }
 
-        try:
-            # Check for visualization patterns
-            for viz_type, pattern in viz_patterns.items():
-                if re.search(pattern, query.lower()):
-                    viz_response = self._handle_visualization_query(query, viz_type)
-                    if viz_response:
-                        return viz_response
+        query_lower = query.lower()
+        for viz_type, config in viz_patterns.items():
+            if re.search(config['pattern'], query_lower):
+                for key, params in config['matches'].items():
+                    if key in query_lower:
+                        return {
+                            'type': 'visualization',
+                            'viz_type': viz_type,
+                            'params': params
+                        }
 
-            # Handle regular queries with error handling
-            response = self.agent.run(query)
-            return response
-        except Exception as e:
-            error_msg = str(e)
-            if "insufficient_quota" in error_msg:
-                return "I apologize, but I'm currently unable to process requests due to API limits. Please try again later or contact support to ensure your API key has sufficient credits."
-            elif "rate_limit" in error_msg:
-                return "I'm receiving too many requests right now. Please wait a moment and try again."
-            else:
-                return f"I apologize, but I couldn't process that query. Please try rephrasing your question or ask something else."
+        return None
 
-    def _handle_visualization_query(self, query, viz_type):
+    def _format_response(self, response: str) -> str:
         """
-        Handle queries that require visualization with proper error handling
+        Clean and format the response for better presentation
         """
-        try:
-            if viz_type == "histogram":
-                if "age" in query.lower():
-                    return {
-                        "viz_type": "histogram",
-                        "params": {
-                            "column": "Age",
-                            "bins": 30,
-                            "title": "Distribution of Passenger Ages"
-                        }
-                    }
-                elif "fare" in query.lower():
-                    return {
-                        "viz_type": "histogram",
-                        "params": {
-                            "column": "Fare",
-                            "bins": 50,
-                            "title": "Distribution of Ticket Fares"
-                        }
-                    }
+        # Remove any markdown formatting
+        response = re.sub(r'```.*?```', '', response, flags=re.DOTALL)
+        # Clean up newlines and spaces
+        response = re.sub(r'\s+', ' ', response).strip()
+        # Capitalize first letter
+        response = response[0].upper() + response[1:] if response else response
 
-            elif viz_type == "bar":
-                if "embarked" in query.lower():
-                    return {
-                        "viz_type": "bar",
-                        "params": {
-                            "column": "Embarked",
-                            "title": "Passengers by Embarkation Port"
-                        }
-                    }
+        return response
 
-            elif viz_type == "pie":
-                if "class" in query.lower():
-                    return {
-                        "viz_type": "pie",
-                        "params": {
-                            "column": "Pclass",
-                            "title": "Distribution of Passenger Classes"
-                        }
-                    }
-                elif "gender" in query.lower() or "male" in query.lower() or "female" in query.lower():
-                    return {
-                        "viz_type": "pie",
-                        "params": {
-                            "column": "Sex",
-                            "title": "Gender Distribution"
-                        }
-                    }
+    def _handle_error(self, error: Exception) -> str:
+        """
+        Handle different types of errors and return user-friendly messages
+        """
+        error_msg = str(error)
 
-            return None
-        except Exception as e:
-            return f"Error creating visualization: {str(e)}"
+        if "insufficient_quota" in error_msg:
+            return ("I apologize, but I'm currently unable to process requests due to API limits. "
+                   "Please try again later or contact support.")
+        elif "rate_limit" in error_msg:
+            return "I'm receiving too many requests right now. Please wait a moment and try again."
+        elif "timeout" in error_msg:
+            return "The request took too long to process. Please try a simpler question."
+        elif "security" in error_msg.lower():
+            return "I cannot process that query due to security restrictions. Please try a different question."
+        else:
+            return ("I apologize, but I couldn't process that query. Please try rephrasing your "
+                   "question or ask something else.")
